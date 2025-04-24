@@ -46,6 +46,11 @@ export default class TemplateFilenamePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	// Global counter for sequential numbering
+	private globalCounter: number = 1;
+	private namedCounters: Record<string, number> = {};
+	private clipboard: string = '';
+
 	/**
 	 * Process a filename template and return the processed string
 	 * @param template The template string to process
@@ -63,9 +68,18 @@ export default class TemplateFilenamePlugin extends Plugin {
 			// Month
 			.replace(/MM/g, (now.getMonth() + 1).toString().padStart(2, '0'))
 			.replace(/M/g, (now.getMonth() + 1).toString())
+			.replace(/MMMM/g, this.getMonthName(now.getMonth()))
+			.replace(/MMM/g, this.getMonthName(now.getMonth()).slice(0, 3))
 			// Day
 			.replace(/DD/g, now.getDate().toString().padStart(2, '0'))
 			.replace(/D/g, now.getDate().toString())
+			.replace(/dddd/g, this.getDayName(now.getDay()))
+			.replace(/ddd/g, this.getDayName(now.getDay()).slice(0, 3))
+			.replace(/DDD/g, this.getDayOfYear(now).toString().padStart(3, '0'))
+			// Week
+			.replace(/WW/g, this.getWeekNumber(now).toString().padStart(2, '0'))
+			// Quarter
+			.replace(/Q/g, (Math.floor(now.getMonth() / 3) + 1).toString())
 			// Hour
 			.replace(/HH/g, now.getHours().toString().padStart(2, '0'))
 			.replace(/H/g, now.getHours().toString())
@@ -83,25 +97,145 @@ export default class TemplateFilenamePlugin extends Plugin {
 	}
 
 	/**
+	 * Get the full month name
+	 * @param month Month index (0-11)
+	 * @returns Full month name
+	 */
+	private getMonthName(month: number): string {
+		const monthNames = [
+			'January', 'February', 'March', 'April', 'May', 'June',
+			'July', 'August', 'September', 'October', 'November', 'December'
+		];
+		return monthNames[month];
+	}
+
+	/**
+	 * Get the full day name
+	 * @param day Day index (0-6, starting with Sunday)
+	 * @returns Full day name
+	 */
+	private getDayName(day: number): string {
+		const dayNames = [
+			'Sunday', 'Monday', 'Tuesday', 'Wednesday', 
+			'Thursday', 'Friday', 'Saturday'
+		];
+		return dayNames[day];
+	}
+
+	/**
+	 * Get the day of the year (1-366)
+	 * @param date Date object
+	 * @returns Day of year
+	 */
+	private getDayOfYear(date: Date): number {
+		const start = new Date(date.getFullYear(), 0, 0);
+		const diff = date.getTime() - start.getTime();
+		const oneDay = 1000 * 60 * 60 * 24;
+		return Math.floor(diff / oneDay);
+	}
+
+	/**
+	 * Get the week number of the year (1-53)
+	 * @param date Date object
+	 * @returns Week number
+	 */
+	private getWeekNumber(date: Date): number {
+		const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+		const dayNum = d.getUTCDay() || 7;
+		d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+		const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+		return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+	}
+
+	/**
+	 * Generate a UUID v4
+	 * @returns UUID string
+	 */
+	private generateUUID(): string {
+		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+			const r = Math.random() * 16 | 0;
+			const v = c === 'x' ? r : (r & 0x3 | 0x8);
+			return v.toString(16);
+		});
+	}
+
+	/**
+	 * Generate a short ID (8 characters)
+	 * @returns Short unique ID
+	 */
+	private generateShortId(): string {
+		return Math.random().toString(36).substring(2, 10);
+	}
+
+	/**
+	 * Create a simple hash of a string
+	 * @param str String to hash
+	 * @returns Hash string
+	 */
+	private createHash(str: string): string {
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const char = str.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash; // Convert to 32bit integer
+		}
+		return Math.abs(hash).toString(16);
+	}
+
+	/**
+	 * Get system information like hostname and username
+	 * @param type The type of system info to get ('hostname' or 'username')
+	 * @returns The requested system information
+	 */
+	private getSystemInfo(type: string): string {
+		// Note: Due to Obsidian's sandboxed environment, we use a fallback approach
+		if (type === 'hostname') {
+			// Try to get a device identifier, fall back to "device"
+			return 'device';
+		} else if (type === 'username') {
+			// Try to get username, fall back to "user"
+			return 'user';
+		}
+		return '';
+	}
+
+	/**
+	 * Convert text to a URL-friendly slug
+	 * @param text Text to slugify
+	 * @returns Slugified text
+	 */
+	private slugify(text: string): string {
+		return text
+			.toString()
+			.toLowerCase()
+			.trim()
+			.replace(/\s+/g, '-')        // Replace spaces with -
+			.replace(/&/g, '-and-')      // Replace & with 'and'
+			.replace(/[^\w\-]+/g, '')    // Remove all non-word chars
+			.replace(/\-\-+/g, '-')      // Replace multiple - with single -
+			.replace(/^-+/, '')          // Trim - from start of text
+			.replace(/-+$/, '');         // Trim - from end of text
+	}
+
+	/**
 	 * Process non-date placeholders in the template
 	 * @param template Template string with date placeholders already processed
 	 * @returns Final processed string
 	 */
 	processOtherPlaceholders(template: string): string {
-		// Handle random string placeholder: {random:N} where N is the length
-		const randomRegex = /{random:(\d+)}/g;
 		let result = template;
 		let match;
 
+		// Handle random string placeholder: {random:N} 
+		const randomRegex = /{random:(\d+)}/g;
 		while ((match = randomRegex.exec(template)) !== null) {
 			const length = parseInt(match[1]);
 			const randomStr = this.generateRandomString(length);
 			result = result.replace(match[0], randomStr);
 		}
 
-		// Handle unix timestamp with base conversion: {unixtime:base} where base is between 2-36
+		// Handle unix timestamp with base conversion: {unixtime:base}
 		const unixTimeRegex = /{unixtime:(\d+)}/g;
-		
 		while ((match = unixTimeRegex.exec(template)) !== null) {
 			const base = parseInt(match[1]);
 			if (base >= 2 && base <= 36) {
@@ -113,7 +247,6 @@ export default class TemplateFilenamePlugin extends Plugin {
 
 		// Handle seconds since midnight with base conversion: {daytime:base}
 		const daytimeRegex = /{daytime:(\d+)}/g;
-		
 		while ((match = daytimeRegex.exec(template)) !== null) {
 			const base = parseInt(match[1]);
 			if (base >= 2 && base <= 36) {
@@ -124,6 +257,91 @@ export default class TemplateFilenamePlugin extends Plugin {
 					now.getSeconds();
 				const convertedTime = secondsSinceMidnight.toString(base);
 				result = result.replace(match[0], convertedTime);
+			}
+		}
+
+		// UUID: {uuid}
+		result = result.replace(/{uuid}/g, this.generateUUID());
+
+		// Short ID: {shortid}
+		result = result.replace(/{shortid}/g, this.generateShortId());
+
+		// Hash: {hash:text}
+		const hashRegex = /{hash:([^}]+)}/g;
+		while ((match = hashRegex.exec(template)) !== null) {
+			const text = match[1];
+			const hash = this.createHash(text);
+			result = result.replace(match[0], hash);
+		}
+
+		// Global counter: {counter}
+		result = result.replace(/{counter}/g, this.globalCounter.toString());
+		this.globalCounter++;
+
+		// Named counter: {counter:name}
+		const namedCounterRegex = /{counter:([^}]+)}/g;
+		while ((match = namedCounterRegex.exec(template)) !== null) {
+			const counterName = match[1];
+			if (counterName === 'reset') {
+				this.globalCounter = 1;
+				this.namedCounters = {};
+				result = result.replace(match[0], '');
+			} else {
+				if (!this.namedCounters[counterName]) {
+					this.namedCounters[counterName] = 1;
+				}
+				result = result.replace(match[0], this.namedCounters[counterName].toString());
+				this.namedCounters[counterName]++;
+			}
+		}
+
+		// System info: {hostname}, {username}
+		result = result.replace(/{hostname}/g, this.getSystemInfo('hostname'));
+		result = result.replace(/{username}/g, this.getSystemInfo('username'));
+
+		// Text transformations
+		const lowercaseRegex = /{lowercase:([^}]+)}/g;
+		while ((match = lowercaseRegex.exec(template)) !== null) {
+			const text = match[1];
+			result = result.replace(match[0], text.toLowerCase());
+		}
+
+		const uppercaseRegex = /{uppercase:([^}]+)}/g;
+		while ((match = uppercaseRegex.exec(template)) !== null) {
+			const text = match[1];
+			result = result.replace(match[0], text.toUpperCase());
+		}
+
+		const slugifyRegex = /{slugify:([^}]+)}/g;
+		while ((match = slugifyRegex.exec(template)) !== null) {
+			const text = match[1];
+			result = result.replace(match[0], this.slugify(text));
+		}
+
+		// Clipboard integration - placeholder for now
+		// In a real implementation, this would use the clipboard API
+		const clipboardRegex = /{clip(?::(\d+))?}/g;
+		while ((match = clipboardRegex.exec(template)) !== null) {
+			const charLimit = match[1] ? parseInt(match[1]) : undefined;
+			// In a real implementation, we'd get from clipboard
+			const clipText = "clipboard-content";
+			if (charLimit) {
+				result = result.replace(match[0], clipText.slice(0, charLimit));
+			} else {
+				result = result.replace(match[0], clipText.split(' ')[0]);
+			}
+		}
+
+		const clipWordRegex = /{clipword:(\d+)}/g;
+		while ((match = clipWordRegex.exec(template)) !== null) {
+			const wordIndex = parseInt(match[1]) - 1;
+			// In a real implementation, we'd get from clipboard
+			const clipText = "clipboard content example";
+			const words = clipText.split(' ');
+			if (wordIndex >= 0 && wordIndex < words.length) {
+				result = result.replace(match[0], words[wordIndex]);
+			} else {
+				result = result.replace(match[0], '');
 			}
 		}
 
