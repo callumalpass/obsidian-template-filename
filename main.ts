@@ -21,12 +21,33 @@ export default class TemplateFilenamePlugin extends Plugin {
 			new TemplateFilenameModal(this.app, this).open();
 		});
 
-		// Add command to create note with template filename
+		// Add command to create note with template filename using modal
 		this.addCommand({
 			id: 'create-note-with-template-filename',
 			name: 'Create note with template filename',
 			callback: () => {
 				new TemplateFilenameModal(this.app, this).open();
+			}
+		});
+		
+		// Add command to create note directly with default template
+		this.addCommand({
+			id: 'create-note-with-default-template',
+			name: 'Create note with default template',
+			callback: async () => {
+				try {
+					const processedFilename = this.processTemplate(this.settings.defaultTemplate);
+					const file = await this.createNote(processedFilename, this.settings.defaultContent);
+					new Notice(`Created note: ${file.name}`);
+					
+					// Open the new note
+					const activeLeaf = this.app.workspace.getLeaf(false);
+					if (activeLeaf) {
+						await activeLeaf.openFile(file);
+					}
+				} catch (error) {
+					// Already handled in createNote
+				}
 			}
 		});
 
@@ -58,43 +79,59 @@ export default class TemplateFilenamePlugin extends Plugin {
 	 * @returns The processed filename
 	 */
 	processTemplate(template: string): string {
+		// Create a working copy of the template
+		let result = template;
+		
 		// Process date/time placeholders
 		const now = new Date();
 		
-		// Replace date patterns
-		const processedTemplate = template
-			// Year
-			.replace(/YYYY/g, now.getFullYear().toString())
-			.replace(/YY/g, now.getFullYear().toString().slice(2))
-			// Month
-			.replace(/MM/g, (now.getMonth() + 1).toString().padStart(2, '0'))
-			.replace(/M/g, (now.getMonth() + 1).toString())
-			.replace(/MMMM/g, this.getMonthName(now.getMonth()))
-			.replace(/MMM/g, this.getMonthName(now.getMonth()).slice(0, 3))
-			// Day
-			.replace(/DD/g, now.getDate().toString().padStart(2, '0'))
-			.replace(/D/g, now.getDate().toString())
-			.replace(/dddd/g, this.getDayName(now.getDay()))
-			.replace(/ddd/g, this.getDayName(now.getDay()).slice(0, 3))
-			.replace(/DDD/g, this.getDayOfYear(now).toString().padStart(3, '0'))
-			// Week
-			.replace(/WW/g, this.getWeekNumber(now).toString().padStart(2, '0'))
-			// Quarter
-			.replace(/Q/g, (Math.floor(now.getMonth() / 3) + 1).toString())
-			// Hour
-			.replace(/HH/g, now.getHours().toString().padStart(2, '0'))
-			.replace(/H/g, now.getHours().toString())
-			// Minute
-			.replace(/mm/g, now.getMinutes().toString().padStart(2, '0'))
-			.replace(/m/g, now.getMinutes().toString())
-			// Second
-			.replace(/ss/g, now.getSeconds().toString().padStart(2, '0'))
-			.replace(/s/g, now.getSeconds().toString())
-			// Millisecond
-			.replace(/SSS/g, now.getMilliseconds().toString().padStart(3, '0'));
+		// Helper function to safely replace patterns
+		const safeReplace = (pattern: string | RegExp, replacement: string) => {
+			result = result.replace(pattern, replacement);
+		};
+		
+		// Year
+		safeReplace(/YYYY/g, now.getFullYear().toString());
+		safeReplace(/YY/g, now.getFullYear().toString().slice(2));
+		
+		// Month - note the order matters, replace MMMM before MM
+		safeReplace(/MMMM/g, this.getMonthName(now.getMonth()));
+		safeReplace(/MMM/g, this.getMonthName(now.getMonth()).slice(0, 3));
+		safeReplace(/MM/g, (now.getMonth() + 1).toString().padStart(2, '0'));
+		safeReplace(/M(?![oM])/g, (now.getMonth() + 1).toString()); // M not followed by o or M
+		
+		// Day
+		safeReplace(/DDD/g, this.getDayOfYear(now).toString().padStart(3, '0'));
+		safeReplace(/DD/g, now.getDate().toString().padStart(2, '0'));
+		safeReplace(/D(?![a])/g, now.getDate().toString()); // D not followed by 'a' (to avoid daytime)
+		
+		// Day names
+		safeReplace(/dddd/g, this.getDayName(now.getDay()));
+		safeReplace(/ddd/g, this.getDayName(now.getDay()).slice(0, 3));
+		
+		// Week
+		safeReplace(/WW/g, this.getWeekNumber(now).toString().padStart(2, '0'));
+		
+		// Quarter
+		safeReplace(/Q/g, (Math.floor(now.getMonth() / 3) + 1).toString());
+		
+		// Hour
+		safeReplace(/HH/g, now.getHours().toString().padStart(2, '0'));
+		safeReplace(/H(?![H])/g, now.getHours().toString()); // H not followed by H
+		
+		// Minute
+		safeReplace(/mm/g, now.getMinutes().toString().padStart(2, '0'));
+		safeReplace(/m(?![m])/g, now.getMinutes().toString()); // m not followed by m
+		
+		// Second
+		safeReplace(/ss/g, now.getSeconds().toString().padStart(2, '0'));
+		safeReplace(/s(?![s])/g, now.getSeconds().toString()); // s not followed by s
+		
+		// Millisecond
+		safeReplace(/SSS/g, now.getMilliseconds().toString().padStart(3, '0'));
 
 		// Process other placeholders
-		return this.processOtherPlaceholders(processedTemplate);
+		return this.processSpecialPlaceholders(result);
 	}
 
 	/**
@@ -219,135 +256,281 @@ export default class TemplateFilenamePlugin extends Plugin {
 	}
 
 	/**
-	 * Process non-date placeholders in the template
+	 * Process special placeholders in the template
 	 * @param template Template string with date placeholders already processed
 	 * @returns Final processed string
 	 */
-	processOtherPlaceholders(template: string): string {
-		let result = template;
-		let match;
+processSpecialPlaceholders(template: string): string {
+	// Working copy, not the original reference
+	let result = template;
 
-		// Handle random string placeholder: {random:N} 
-		const randomRegex = /{random:(\d+)}/g;
-		while ((match = randomRegex.exec(template)) !== null) {
-			const length = parseInt(match[1]);
-			const randomStr = this.generateRandomString(length);
-			result = result.replace(match[0], randomStr);
-		}
+	// Process each type of special placeholder
+	result = this.processRandomPlaceholders(result);
+	result = this.processTimestampPlaceholders(result);
+	result = this.processIDPlaceholders(result);
+	result = this.processCounterPlaceholders(result);
+	result = this.processSystemPlaceholders(result);
+	result = this.processTextFormatPlaceholders(result);
+	result = this.processClipboardPlaceholders(result);
+	
+	return result;
+}
 
-		// Handle unix timestamp with base conversion: {unixtime:base}
-		const unixTimeRegex = /{unixtime:(\d+)}/g;
-		while ((match = unixTimeRegex.exec(template)) !== null) {
-			const base = parseInt(match[1]);
-			if (base >= 2 && base <= 36) {
-				const unixTime = Math.floor(Date.now() / 1000);
-				const convertedTime = unixTime.toString(base);
-				result = result.replace(match[0], convertedTime);
-			}
-		}
-
-		// Handle seconds since midnight with base conversion: {daytime:base}
-		const daytimeRegex = /{daytime:(\d+)}/g;
-		while ((match = daytimeRegex.exec(template)) !== null) {
-			const base = parseInt(match[1]);
-			if (base >= 2 && base <= 36) {
-				const now = new Date();
-				const secondsSinceMidnight = 
-					now.getHours() * 3600 + 
-					now.getMinutes() * 60 + 
-					now.getSeconds();
-				const convertedTime = secondsSinceMidnight.toString(base);
-				result = result.replace(match[0], convertedTime);
-			}
-		}
-
-		// UUID: {uuid}
-		result = result.replace(/{uuid}/g, this.generateUUID());
-
-		// Short ID: {shortid}
-		result = result.replace(/{shortid}/g, this.generateShortId());
-
-		// Hash: {hash:text}
-		const hashRegex = /{hash:([^}]+)}/g;
-		while ((match = hashRegex.exec(template)) !== null) {
-			const text = match[1];
-			const hash = this.createHash(text);
-			result = result.replace(match[0], hash);
-		}
-
-		// Global counter: {counter}
-		result = result.replace(/{counter}/g, this.globalCounter.toString());
-		this.globalCounter++;
-
-		// Named counter: {counter:name}
-		const namedCounterRegex = /{counter:([^}]+)}/g;
-		while ((match = namedCounterRegex.exec(template)) !== null) {
-			const counterName = match[1];
-			if (counterName === 'reset') {
-				this.globalCounter = 1;
-				this.namedCounters = {};
-				result = result.replace(match[0], '');
-			} else {
-				if (!this.namedCounters[counterName]) {
-					this.namedCounters[counterName] = 1;
-				}
-				result = result.replace(match[0], this.namedCounters[counterName].toString());
-				this.namedCounters[counterName]++;
-			}
-		}
-
-		// System info: {hostname}, {username}
-		result = result.replace(/{hostname}/g, this.getSystemInfo('hostname'));
-		result = result.replace(/{username}/g, this.getSystemInfo('username'));
-
-		// Text transformations
-		const lowercaseRegex = /{lowercase:([^}]+)}/g;
-		while ((match = lowercaseRegex.exec(template)) !== null) {
-			const text = match[1];
-			result = result.replace(match[0], text.toLowerCase());
-		}
-
-		const uppercaseRegex = /{uppercase:([^}]+)}/g;
-		while ((match = uppercaseRegex.exec(template)) !== null) {
-			const text = match[1];
-			result = result.replace(match[0], text.toUpperCase());
-		}
-
-		const slugifyRegex = /{slugify:([^}]+)}/g;
-		while ((match = slugifyRegex.exec(template)) !== null) {
-			const text = match[1];
-			result = result.replace(match[0], this.slugify(text));
-		}
-
-		// Clipboard integration - placeholder for now
-		// In a real implementation, this would use the clipboard API
-		const clipboardRegex = /{clip(?::(\d+))?}/g;
-		while ((match = clipboardRegex.exec(template)) !== null) {
-			const charLimit = match[1] ? parseInt(match[1]) : undefined;
-			// In a real implementation, we'd get from clipboard
-			const clipText = "clipboard-content";
-			if (charLimit) {
-				result = result.replace(match[0], clipText.slice(0, charLimit));
-			} else {
-				result = result.replace(match[0], clipText.split(' ')[0]);
-			}
-		}
-
-		const clipWordRegex = /{clipword:(\d+)}/g;
-		while ((match = clipWordRegex.exec(template)) !== null) {
-			const wordIndex = parseInt(match[1]) - 1;
-			// In a real implementation, we'd get from clipboard
-			const clipText = "clipboard content example";
-			const words = clipText.split(' ');
-			if (wordIndex >= 0 && wordIndex < words.length) {
-				result = result.replace(match[0], words[wordIndex]);
-			} else {
-				result = result.replace(match[0], '');
-			}
-		}
-
-		return result;
+/**
+ * Process random string placeholders
+ */
+private processRandomPlaceholders(template: string): string {
+	let result = template;
+	const randomRegex = /\{random:(\d+)\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = template;
+	
+	// Reset regex state
+	randomRegex.lastIndex = 0;
+	
+	while ((match = randomRegex.exec(templateCopy)) !== null) {
+		const length = parseInt(match[1]);
+		const randomStr = this.generateRandomString(length);
+		// Use match[0] which contains the full match like {random:6}
+		result = result.replace(match[0], randomStr);
 	}
+	
+	return result;
+}
+
+/**
+ * Process timestamp placeholders
+ */
+private processTimestampPlaceholders(template: string): string {
+	let result = template;
+	
+	// Unix timestamp in different bases
+	const unixTimeRegex = /\{unixtime:(\d+)\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = template;
+	
+	// Reset regex state
+	unixTimeRegex.lastIndex = 0;
+	
+	while ((match = unixTimeRegex.exec(templateCopy)) !== null) {
+		const base = parseInt(match[1]);
+		if (base >= 2 && base <= 36) {
+			const unixTime = Math.floor(Date.now() / 1000);
+			const convertedTime = unixTime.toString(base);
+			// Use match[0] which contains the full match
+			result = result.replace(match[0], convertedTime);
+		}
+	}
+	
+	// Seconds since midnight in different bases
+	const daytimeRegex = /\{daytime:(\d+)\}/g;
+	
+	// Reset regex state
+	daytimeRegex.lastIndex = 0;
+	
+	const templateCopy2 = result; // Use the current result as the base
+	
+	while ((match = daytimeRegex.exec(templateCopy2)) !== null) {
+		const base = parseInt(match[1]);
+		if (base >= 2 && base <= 36) {
+			const now = new Date();
+			const secondsSinceMidnight = 
+				now.getHours() * 3600 + 
+				now.getMinutes() * 60 + 
+				now.getSeconds();
+			const convertedTime = secondsSinceMidnight.toString(base);
+			// Use match[0] which contains the full match
+			result = result.replace(match[0], convertedTime);
+		}
+	}
+	
+	return result;
+}
+
+/**
+ * Process ID placeholders
+ */
+private processIDPlaceholders(template: string): string {
+	let result = template;
+	
+	// UUID
+	result = result.replace(/\{uuid\}/g, this.generateUUID());
+	
+	// Short ID
+	result = result.replace(/\{shortid\}/g, this.generateShortId());
+	
+	// Hash of text
+	const hashRegex = /\{hash:([^}]+)\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = result;
+	
+	// Reset regex state
+	hashRegex.lastIndex = 0;
+	
+	while ((match = hashRegex.exec(templateCopy)) !== null) {
+		const text = match[1];
+		const hash = this.createHash(text);
+		result = result.replace(match[0], hash);
+	}
+	
+	return result;
+}
+
+/**
+ * Process counter placeholders
+ */
+private processCounterPlaceholders(template: string): string {
+	let result = template;
+	
+	// Global counter
+	result = result.replace(/\{counter\}/g, this.globalCounter.toString());
+	this.globalCounter++;
+	
+	// Named counters
+	const namedCounterRegex = /\{counter:([^}]+)\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = result;
+	
+	// Reset regex state
+	namedCounterRegex.lastIndex = 0;
+	
+	while ((match = namedCounterRegex.exec(templateCopy)) !== null) {
+		const counterName = match[1];
+		if (counterName === 'reset') {
+			this.globalCounter = 1;
+			this.namedCounters = {};
+			result = result.replace(match[0], '');
+		} else {
+			if (!this.namedCounters[counterName]) {
+				this.namedCounters[counterName] = 1;
+			}
+			result = result.replace(match[0], this.namedCounters[counterName].toString());
+			this.namedCounters[counterName]++;
+		}
+	}
+	
+	return result;
+}
+
+/**
+ * Process system placeholders
+ */
+private processSystemPlaceholders(template: string): string {
+	let result = template;
+	
+	// Hostname
+	result = result.replace(/\{hostname\}/g, this.getSystemInfo('hostname'));
+	
+	// Username
+	result = result.replace(/\{username\}/g, this.getSystemInfo('username'));
+	
+	return result;
+}
+
+/**
+ * Process text format placeholders
+ */
+private processTextFormatPlaceholders(template: string): string {
+	let result = template;
+	
+	// Lowercase
+	const lowercaseRegex = /\{lowercase:([^}]+)\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = result;
+	
+	// Reset regex state
+	lowercaseRegex.lastIndex = 0;
+	
+	while ((match = lowercaseRegex.exec(templateCopy)) !== null) {
+		const text = match[1];
+		result = result.replace(match[0], text.toLowerCase());
+	}
+	
+	// Uppercase
+	const uppercaseRegex = /\{uppercase:([^}]+)\}/g;
+	const templateCopy2 = result;
+	
+	// Reset regex state
+	uppercaseRegex.lastIndex = 0;
+	
+	while ((match = uppercaseRegex.exec(templateCopy2)) !== null) {
+		const text = match[1];
+		result = result.replace(match[0], text.toUpperCase());
+	}
+	
+	// Slugify
+	const slugifyRegex = /\{slugify:([^}]+)\}/g;
+	const templateCopy3 = result;
+	
+	// Reset regex state
+	slugifyRegex.lastIndex = 0;
+	
+	while ((match = slugifyRegex.exec(templateCopy3)) !== null) {
+		const text = match[1];
+		result = result.replace(match[0], this.slugify(text));
+	}
+	
+	return result;
+}
+
+/**
+ * Process clipboard placeholders
+ */
+private processClipboardPlaceholders(template: string): string {
+	let result = template;
+	
+	// Clipboard prefix
+	const clipboardRegex = /\{clip(?::(\d+))?\}/g;
+	let match;
+	
+	// Create a copy to avoid regex state issues
+	const templateCopy = result;
+	
+	// Reset regex state
+	clipboardRegex.lastIndex = 0;
+	
+	while ((match = clipboardRegex.exec(templateCopy)) !== null) {
+		const charLimit = match[1] ? parseInt(match[1]) : undefined;
+		// In a real implementation, we'd get from clipboard
+		const clipText = "clipboard-content";
+		if (charLimit) {
+			result = result.replace(match[0], clipText.slice(0, charLimit));
+		} else {
+			result = result.replace(match[0], clipText.split(' ')[0]);
+		}
+	}
+	
+	// Clipboard word
+	const clipWordRegex = /\{clipword:(\d+)\}/g;
+	const templateCopy2 = result;
+	
+	// Reset regex state
+	clipWordRegex.lastIndex = 0;
+	
+	while ((match = clipWordRegex.exec(templateCopy2)) !== null) {
+		const wordIndex = parseInt(match[1]) - 1;
+		// In a real implementation, we'd get from clipboard
+		const clipText = "clipboard content example";
+		const words = clipText.split(' ');
+		if (wordIndex >= 0 && wordIndex < words.length) {
+			result = result.replace(match[0], words[wordIndex]);
+		} else {
+			result = result.replace(match[0], '');
+		}
+	}
+	
+	return result;
+}
 
 	/**
 	 * Generate a random string of specified length
