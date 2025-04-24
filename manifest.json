@@ -1,7 +1,7 @@
 {
 	"id": "template-filename",
 	"name": "Template Filename",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"minAppVersion": "0.15.0",
 	"description": "Create notes with templatable filenames, using date/time formats, random strings, and custom base numbering systems.",
 	"author": "",

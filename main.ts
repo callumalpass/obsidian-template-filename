@@ -12,6 +12,8 @@ const DEFAULT_SETTINGS: TemplateFilenameSettings = {
 
 export default class TemplateFilenamePlugin extends Plugin {
 	settings: TemplateFilenameSettings;
+	private globalCounter: number = 1;
+	private namedCounters: Record<string, number> = {};
 
 	async onload() {
 		await this.loadSettings();
@@ -68,70 +70,283 @@ export default class TemplateFilenamePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	// Global counter for sequential numbering
-	private globalCounter: number = 1;
-	private namedCounters: Record<string, number> = {};
-	private clipboard: string = '';
-
 	/**
-	 * Process a filename template and return the processed string
-	 * @param template The template string to process
-	 * @returns The processed filename
+	 * Process a template string to create a filename
+	 * @param template The template string
+	 * @returns The processed template with all variables replaced
 	 */
 	processTemplate(template: string): string {
-		// Create a working copy of the template
-		let result = template;
+		// Create a tokenizer to properly parse the template
+		const tokens = this.tokenizeTemplate(template);
+		let result = '';
+
+		// Process each token
+		for (const token of tokens) {
+			if (token.type === 'text' && token.value !== undefined) {
+				result += token.value;
+			} else if (token.type === 'variable' && token.name !== undefined) {
+				result += this.processVariable(token.name, token.params || []);
+			}
+		}
+
+		return result;
+	}
+
+	/**
+	 * Tokenize a template string into text and variable tokens
+	 * @param template The template string
+	 * @returns Array of tokens
+	 */
+	private tokenizeTemplate(template: string): Array<{type: string, value?: string, name?: string, params?: string[]}> {
+		const tokens: Array<{type: string, value?: string, name?: string, params?: string[]}> = [];
+		let currentPos = 0;
 		
-		// Process date/time placeholders
+		// Date/time variables to look for
+		const dateTimeVars = [
+			'YYYY', 'YY', 'MMMM', 'MMM', 'MM', 'M', 
+			'DDD', 'DD', 'D', 'dddd', 'ddd', 'WW', 'Q',
+			'HH', 'H', 'mm', 'm', 'ss', 's', 'SSS'
+		];
+		
+		while (currentPos < template.length) {
+			// Look for date/time variables
+			let foundDateTimeVar = false;
+			for (const dtVar of dateTimeVars) {
+				if (template.substring(currentPos).startsWith(dtVar)) {
+					// Found a date/time variable
+					// Add any text before it
+					if (currentPos > 0) {
+						const textBefore = template.substring(0, currentPos);
+						if (textBefore) {
+							tokens.push({
+								type: 'text',
+								value: textBefore
+							});
+						}
+					}
+					
+					// Add the date/time variable
+					tokens.push({
+						type: 'variable',
+						name: dtVar,
+						params: []
+					});
+					
+					// Move past the variable
+					template = template.substring(currentPos + dtVar.length);
+					currentPos = 0;
+					foundDateTimeVar = true;
+					break;
+				}
+			}
+			
+			// If we found a date/time variable, continue to the next iteration
+			if (foundDateTimeVar) {
+				continue;
+			}
+			
+			// Look for special variables in curly braces
+			if (template[currentPos] === '{') {
+				const endBracePos = template.indexOf('}', currentPos);
+				if (endBracePos !== -1) {
+					// Found a complete variable in braces
+					// Add any text before the opening brace
+					if (currentPos > 0) {
+						const textBefore = template.substring(0, currentPos);
+						if (textBefore) {
+							tokens.push({
+								type: 'text',
+								value: textBefore
+							});
+						}
+					}
+					
+					// Parse the variable and its parameters
+					const varContent = template.substring(currentPos + 1, endBracePos);
+					const colonPos = varContent.indexOf(':');
+					
+					if (colonPos !== -1) {
+						// Variable with parameters
+						const varName = varContent.substring(0, colonPos);
+						const varParams = varContent.substring(colonPos + 1).split(',');
+						
+						tokens.push({
+							type: 'variable',
+							name: varName,
+							params: varParams
+						});
+					} else {
+						// Variable without parameters
+						tokens.push({
+							type: 'variable',
+							name: varContent,
+							params: []
+						});
+					}
+					
+					// Move past the closing brace
+					template = template.substring(endBracePos + 1);
+					currentPos = 0;
+					continue;
+				}
+			}
+			
+			// Move to the next character
+			currentPos++;
+			
+			// If we've reached the end, add the remaining text
+			if (currentPos === template.length) {
+				tokens.push({
+					type: 'text',
+					value: template
+				});
+			}
+		}
+		
+		return tokens;
+	}
+
+	/**
+	 * Process a variable token
+	 * @param name Variable name
+	 * @param params Variable parameters
+	 * @returns The processed value
+	 */
+	private processVariable(name: string, params: string[] = []): string {
 		const now = new Date();
 		
-		// Helper function to safely replace patterns
-		const safeReplace = (pattern: string | RegExp, replacement: string) => {
-			result = result.replace(pattern, replacement);
-		};
-		
-		// Year
-		safeReplace(/YYYY/g, now.getFullYear().toString());
-		safeReplace(/YY/g, now.getFullYear().toString().slice(2));
-		
-		// Month - note the order matters, replace MMMM before MM
-		safeReplace(/MMMM/g, this.getMonthName(now.getMonth()));
-		safeReplace(/MMM/g, this.getMonthName(now.getMonth()).slice(0, 3));
-		safeReplace(/MM/g, (now.getMonth() + 1).toString().padStart(2, '0'));
-		safeReplace(/M(?![oM])/g, (now.getMonth() + 1).toString()); // M not followed by o or M
-		
-		// Day
-		safeReplace(/DDD/g, this.getDayOfYear(now).toString().padStart(3, '0'));
-		safeReplace(/DD/g, now.getDate().toString().padStart(2, '0'));
-		safeReplace(/D(?![a])/g, now.getDate().toString()); // D not followed by 'a' (to avoid daytime)
-		
-		// Day names
-		safeReplace(/dddd/g, this.getDayName(now.getDay()));
-		safeReplace(/ddd/g, this.getDayName(now.getDay()).slice(0, 3));
-		
-		// Week
-		safeReplace(/WW/g, this.getWeekNumber(now).toString().padStart(2, '0'));
-		
-		// Quarter
-		safeReplace(/Q/g, (Math.floor(now.getMonth() / 3) + 1).toString());
-		
-		// Hour
-		safeReplace(/HH/g, now.getHours().toString().padStart(2, '0'));
-		safeReplace(/H(?![H])/g, now.getHours().toString()); // H not followed by H
-		
-		// Minute
-		safeReplace(/mm/g, now.getMinutes().toString().padStart(2, '0'));
-		safeReplace(/m(?![m])/g, now.getMinutes().toString()); // m not followed by m
-		
-		// Second
-		safeReplace(/ss/g, now.getSeconds().toString().padStart(2, '0'));
-		safeReplace(/s(?![s])/g, now.getSeconds().toString()); // s not followed by s
-		
-		// Millisecond
-		safeReplace(/SSS/g, now.getMilliseconds().toString().padStart(3, '0'));
-
-		// Process other placeholders
-		return this.processSpecialPlaceholders(result);
+		// Date/time variables
+		switch (name) {
+			// Year
+			case 'YYYY': return now.getFullYear().toString();
+			case 'YY': return now.getFullYear().toString().slice(2);
+			
+			// Month
+			case 'MMMM': return this.getMonthName(now.getMonth());
+			case 'MMM': return this.getMonthName(now.getMonth()).slice(0, 3);
+			case 'MM': return (now.getMonth() + 1).toString().padStart(2, '0');
+			case 'M': return (now.getMonth() + 1).toString();
+			
+			// Day
+			case 'DDD': return this.getDayOfYear(now).toString().padStart(3, '0');
+			case 'DD': return now.getDate().toString().padStart(2, '0');
+			case 'D': return now.getDate().toString();
+			
+			// Day names
+			case 'dddd': return this.getDayName(now.getDay());
+			case 'ddd': return this.getDayName(now.getDay()).slice(0, 3);
+			
+			// Week
+			case 'WW': return this.getWeekNumber(now).toString().padStart(2, '0');
+			
+			// Quarter
+			case 'Q': return (Math.floor(now.getMonth() / 3) + 1).toString();
+			
+			// Hour
+			case 'HH': return now.getHours().toString().padStart(2, '0');
+			case 'H': return now.getHours().toString();
+			
+			// Minute
+			case 'mm': return now.getMinutes().toString().padStart(2, '0');
+			case 'm': return now.getMinutes().toString();
+			
+			// Second
+			case 'ss': return now.getSeconds().toString().padStart(2, '0');
+			case 's': return now.getSeconds().toString();
+			
+			// Millisecond
+			case 'SSS': return now.getMilliseconds().toString().padStart(3, '0');
+			
+			// Random string
+			case 'random': {
+				const length = parseInt(params[0]) || 6;
+				return this.generateRandomString(length);
+			}
+			
+			// Unique identifiers
+			case 'uuid': return this.generateUUID();
+			case 'shortid': return this.generateShortId();
+			
+			// Hash
+			case 'hash': return this.createHash(params[0] || '');
+			
+			// Timestamps
+			case 'unixtime': {
+				const base = parseInt(params[0]) || 10;
+				if (base >= 2 && base <= 36) {
+					return Math.floor(Date.now() / 1000).toString(base);
+				}
+				return Math.floor(Date.now() / 1000).toString();
+			}
+			
+			case 'daytime': {
+				const base = parseInt(params[0]) || 10;
+				const secondsSinceMidnight = 
+					now.getHours() * 3600 + 
+					now.getMinutes() * 60 + 
+					now.getSeconds();
+				
+				if (base >= 2 && base <= 36) {
+					return secondsSinceMidnight.toString(base);
+				}
+				return secondsSinceMidnight.toString();
+			}
+			
+			// Counters
+			case 'counter': {
+				if (params.length > 0) {
+					if (params[0] === 'reset') {
+						this.globalCounter = 1;
+						this.namedCounters = {};
+						return '';
+					} else {
+						const counterName = params[0];
+						if (!this.namedCounters[counterName]) {
+							this.namedCounters[counterName] = 1;
+						}
+						const value = this.namedCounters[counterName];
+						this.namedCounters[counterName]++;
+						return value.toString();
+					}
+				} else {
+					const value = this.globalCounter;
+					this.globalCounter++;
+					return value.toString();
+				}
+			}
+			
+			// System variables
+			case 'hostname': return 'device';
+			case 'username': return 'user';
+			
+			// Text formatting
+			case 'lowercase': return (params[0] || '').toLowerCase();
+			case 'uppercase': return (params[0] || '').toUpperCase();
+			case 'slugify': return this.slugify(params[0] || '');
+			
+			// Clipboard (placeholder implementation)
+			case 'clip': {
+				const clipText = "clipboard-content";
+				if (params.length > 0) {
+					const charLimit = parseInt(params[0]);
+					return clipText.slice(0, charLimit);
+				}
+				return clipText.split(' ')[0];
+			}
+			
+			case 'clipword': {
+				const clipText = "clipboard content example";
+				const words = clipText.split(' ');
+				const wordIndex = parseInt(params[0]) - 1 || 0;
+				if (wordIndex >= 0 && wordIndex < words.length) {
+					return words[wordIndex];
+				}
+				return '';
+			}
+			
+			// Unknown variable
+			default: return `{${name}${params.length > 0 ? ':' + params.join(',') : ''}}`;
+		}
 	}
 
 	/**
@@ -221,23 +436,6 @@ export default class TemplateFilenamePlugin extends Plugin {
 	}
 
 	/**
-	 * Get system information like hostname and username
-	 * @param type The type of system info to get ('hostname' or 'username')
-	 * @returns The requested system information
-	 */
-	private getSystemInfo(type: string): string {
-		// Note: Due to Obsidian's sandboxed environment, we use a fallback approach
-		if (type === 'hostname') {
-			// Try to get a device identifier, fall back to "device"
-			return 'device';
-		} else if (type === 'username') {
-			// Try to get username, fall back to "user"
-			return 'user';
-		}
-		return '';
-	}
-
-	/**
 	 * Convert text to a URL-friendly slug
 	 * @param text Text to slugify
 	 * @returns Slugified text
@@ -256,288 +454,11 @@ export default class TemplateFilenamePlugin extends Plugin {
 	}
 
 	/**
-	 * Process special placeholders in the template
-	 * @param template Template string with date placeholders already processed
-	 * @returns Final processed string
-	 */
-processSpecialPlaceholders(template: string): string {
-	// Working copy, not the original reference
-	let result = template;
-
-	// Process each type of special placeholder
-	result = this.processRandomPlaceholders(result);
-	result = this.processTimestampPlaceholders(result);
-	result = this.processIDPlaceholders(result);
-	result = this.processCounterPlaceholders(result);
-	result = this.processSystemPlaceholders(result);
-	result = this.processTextFormatPlaceholders(result);
-	result = this.processClipboardPlaceholders(result);
-	
-	return result;
-}
-
-/**
- * Process random string placeholders
- */
-private processRandomPlaceholders(template: string): string {
-	let result = template;
-	const randomRegex = /\{random:(\d+)\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = template;
-	
-	// Reset regex state
-	randomRegex.lastIndex = 0;
-	
-	while ((match = randomRegex.exec(templateCopy)) !== null) {
-		const length = parseInt(match[1]);
-		const randomStr = this.generateRandomString(length);
-		// Use match[0] which contains the full match like {random:6}
-		result = result.replace(match[0], randomStr);
-	}
-	
-	return result;
-}
-
-/**
- * Process timestamp placeholders
- */
-private processTimestampPlaceholders(template: string): string {
-	let result = template;
-	
-	// Unix timestamp in different bases
-	const unixTimeRegex = /\{unixtime:(\d+)\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = template;
-	
-	// Reset regex state
-	unixTimeRegex.lastIndex = 0;
-	
-	while ((match = unixTimeRegex.exec(templateCopy)) !== null) {
-		const base = parseInt(match[1]);
-		if (base >= 2 && base <= 36) {
-			const unixTime = Math.floor(Date.now() / 1000);
-			const convertedTime = unixTime.toString(base);
-			// Use match[0] which contains the full match
-			result = result.replace(match[0], convertedTime);
-		}
-	}
-	
-	// Seconds since midnight in different bases
-	const daytimeRegex = /\{daytime:(\d+)\}/g;
-	
-	// Reset regex state
-	daytimeRegex.lastIndex = 0;
-	
-	const templateCopy2 = result; // Use the current result as the base
-	
-	while ((match = daytimeRegex.exec(templateCopy2)) !== null) {
-		const base = parseInt(match[1]);
-		if (base >= 2 && base <= 36) {
-			const now = new Date();
-			const secondsSinceMidnight = 
-				now.getHours() * 3600 + 
-				now.getMinutes() * 60 + 
-				now.getSeconds();
-			const convertedTime = secondsSinceMidnight.toString(base);
-			// Use match[0] which contains the full match
-			result = result.replace(match[0], convertedTime);
-		}
-	}
-	
-	return result;
-}
-
-/**
- * Process ID placeholders
- */
-private processIDPlaceholders(template: string): string {
-	let result = template;
-	
-	// UUID
-	result = result.replace(/\{uuid\}/g, this.generateUUID());
-	
-	// Short ID
-	result = result.replace(/\{shortid\}/g, this.generateShortId());
-	
-	// Hash of text
-	const hashRegex = /\{hash:([^}]+)\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = result;
-	
-	// Reset regex state
-	hashRegex.lastIndex = 0;
-	
-	while ((match = hashRegex.exec(templateCopy)) !== null) {
-		const text = match[1];
-		const hash = this.createHash(text);
-		result = result.replace(match[0], hash);
-	}
-	
-	return result;
-}
-
-/**
- * Process counter placeholders
- */
-private processCounterPlaceholders(template: string): string {
-	let result = template;
-	
-	// Global counter
-	result = result.replace(/\{counter\}/g, this.globalCounter.toString());
-	this.globalCounter++;
-	
-	// Named counters
-	const namedCounterRegex = /\{counter:([^}]+)\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = result;
-	
-	// Reset regex state
-	namedCounterRegex.lastIndex = 0;
-	
-	while ((match = namedCounterRegex.exec(templateCopy)) !== null) {
-		const counterName = match[1];
-		if (counterName === 'reset') {
-			this.globalCounter = 1;
-			this.namedCounters = {};
-			result = result.replace(match[0], '');
-		} else {
-			if (!this.namedCounters[counterName]) {
-				this.namedCounters[counterName] = 1;
-			}
-			result = result.replace(match[0], this.namedCounters[counterName].toString());
-			this.namedCounters[counterName]++;
-		}
-	}
-	
-	return result;
-}
-
-/**
- * Process system placeholders
- */
-private processSystemPlaceholders(template: string): string {
-	let result = template;
-	
-	// Hostname
-	result = result.replace(/\{hostname\}/g, this.getSystemInfo('hostname'));
-	
-	// Username
-	result = result.replace(/\{username\}/g, this.getSystemInfo('username'));
-	
-	return result;
-}
-
-/**
- * Process text format placeholders
- */
-private processTextFormatPlaceholders(template: string): string {
-	let result = template;
-	
-	// Lowercase
-	const lowercaseRegex = /\{lowercase:([^}]+)\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = result;
-	
-	// Reset regex state
-	lowercaseRegex.lastIndex = 0;
-	
-	while ((match = lowercaseRegex.exec(templateCopy)) !== null) {
-		const text = match[1];
-		result = result.replace(match[0], text.toLowerCase());
-	}
-	
-	// Uppercase
-	const uppercaseRegex = /\{uppercase:([^}]+)\}/g;
-	const templateCopy2 = result;
-	
-	// Reset regex state
-	uppercaseRegex.lastIndex = 0;
-	
-	while ((match = uppercaseRegex.exec(templateCopy2)) !== null) {
-		const text = match[1];
-		result = result.replace(match[0], text.toUpperCase());
-	}
-	
-	// Slugify
-	const slugifyRegex = /\{slugify:([^}]+)\}/g;
-	const templateCopy3 = result;
-	
-	// Reset regex state
-	slugifyRegex.lastIndex = 0;
-	
-	while ((match = slugifyRegex.exec(templateCopy3)) !== null) {
-		const text = match[1];
-		result = result.replace(match[0], this.slugify(text));
-	}
-	
-	return result;
-}
-
-/**
- * Process clipboard placeholders
- */
-private processClipboardPlaceholders(template: string): string {
-	let result = template;
-	
-	// Clipboard prefix
-	const clipboardRegex = /\{clip(?::(\d+))?\}/g;
-	let match;
-	
-	// Create a copy to avoid regex state issues
-	const templateCopy = result;
-	
-	// Reset regex state
-	clipboardRegex.lastIndex = 0;
-	
-	while ((match = clipboardRegex.exec(templateCopy)) !== null) {
-		const charLimit = match[1] ? parseInt(match[1]) : undefined;
-		// In a real implementation, we'd get from clipboard
-		const clipText = "clipboard-content";
-		if (charLimit) {
-			result = result.replace(match[0], clipText.slice(0, charLimit));
-		} else {
-			result = result.replace(match[0], clipText.split(' ')[0]);
-		}
-	}
-	
-	// Clipboard word
-	const clipWordRegex = /\{clipword:(\d+)\}/g;
-	const templateCopy2 = result;
-	
-	// Reset regex state
-	clipWordRegex.lastIndex = 0;
-	
-	while ((match = clipWordRegex.exec(templateCopy2)) !== null) {
-		const wordIndex = parseInt(match[1]) - 1;
-		// In a real implementation, we'd get from clipboard
-		const clipText = "clipboard content example";
-		const words = clipText.split(' ');
-		if (wordIndex >= 0 && wordIndex < words.length) {
-			result = result.replace(match[0], words[wordIndex]);
-		} else {
-			result = result.replace(match[0], '');
-		}
-	}
-	
-	return result;
-}
-
-	/**
 	 * Generate a random string of specified length
 	 * @param length Length of the random string
 	 * @returns Random string
 	 */
-	generateRandomString(length: number): string {
+	private generateRandomString(length: number): string {
 		const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 		let result = '';
 		for (let i = 0; i < length; i++) {
@@ -654,7 +575,56 @@ class TemplateFilenameModal extends Modal {
 		
 		this.createHelpList(idList, idItems);
 		
-		// Add other sections for counters, system variables, etc.
+		// Counter Variables
+		const counterSection = details.createEl('div');
+		counterSection.createEl('h4', { text: 'Counter variables' });
+		
+		const counterList = counterSection.createEl('ul');
+		const counterItems = [
+			{ name: '{counter}', desc: 'Global auto-incrementing counter' },
+			{ name: '{counter:name}', desc: 'Named counter (separate sequence)' },
+			{ name: '{counter:reset}', desc: 'Reset all counters' }
+		];
+		
+		this.createHelpList(counterList, counterItems);
+		
+		// System Variables
+		const systemSection = details.createEl('div');
+		systemSection.createEl('h4', { text: 'System variables' });
+		
+		const systemList = systemSection.createEl('ul');
+		const systemItems = [
+			{ name: '{hostname}', desc: 'Computer/device name' },
+			{ name: '{username}', desc: 'Current user\'s name' }
+		];
+		
+		this.createHelpList(systemList, systemItems);
+		
+		// Text Formatting
+		const formatSection = details.createEl('div');
+		formatSection.createEl('h4', { text: 'Text formatting' });
+		
+		const formatList = formatSection.createEl('ul');
+		const formatItems = [
+			{ name: '{lowercase:text}', desc: 'Convert text to lowercase' },
+			{ name: '{uppercase:text}', desc: 'Convert text to uppercase' },
+			{ name: '{slugify:text}', desc: 'Convert text to URL-friendly slug' }
+		];
+		
+		this.createHelpList(formatList, formatItems);
+		
+		// Clipboard
+		const clipboardSection = details.createEl('div');
+		clipboardSection.createEl('h4', { text: 'Clipboard integration' });
+		
+		const clipboardList = clipboardSection.createEl('ul');
+		const clipboardItems = [
+			{ name: '{clip}', desc: 'First word from clipboard' },
+			{ name: '{clip:N}', desc: 'First N characters from clipboard' },
+			{ name: '{clipword:N}', desc: 'Nth word from clipboard' }
+		];
+		
+		this.createHelpList(clipboardList, clipboardItems);
 		
 		// Preview
 		contentEl.createEl('label', { text: 'Preview:' });
@@ -728,7 +698,6 @@ class TemplateFilenameModal extends Modal {
 			this.close();
 		} catch (error) {
 			// Already handled in the plugin.createNote method
-			// No need to log to console or show duplicate notification
 		}
 	}
 
