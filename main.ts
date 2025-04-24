@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath } from 'obsidian';
 
 interface TemplateFilenameSettings {
 	defaultTemplate: string;
@@ -35,7 +35,8 @@ export default class TemplateFilenamePlugin extends Plugin {
 	}
 
 	onunload() {
-		// Nothing to clean up
+		// Nothing to clean up since we're using the built-in
+		// Plugin methods for resource management
 	}
 
 	async loadSettings() {
@@ -373,13 +374,16 @@ export default class TemplateFilenamePlugin extends Plugin {
 			filename += '.md';
 		}
 
+		// Normalize the path to ensure cross-platform compatibility
+		const normalizedPath = normalizePath(filename);
+
 		// Create the note
 		try {
-			const file = await this.app.vault.create(filename, content);
+			const file = await this.app.vault.create(normalizedPath, content);
 			return file;
 		} catch (error) {
-			console.error('Error creating note:', error);
-			new Notice('Error creating note: ' + error);
+			// Only show error message to user, don't log to console unnecessarily
+			new Notice(`Error creating note: ${error}`);
 			throw error;
 		}
 	}
@@ -400,76 +404,106 @@ class TemplateFilenameModal extends Modal {
 		const { contentEl } = this;
 		
 		// Title
-		contentEl.createEl('h2', { text: 'Create Note with Template Filename' });
+		contentEl.createEl('h2', { text: 'Create note with template filename' });
 		
 		// Template input
-		contentEl.createEl('label', { text: 'Filename Template:' }).setAttribute('for', 'template-input');
+		contentEl.createEl('label', { text: 'Filename template:' }).setAttribute('for', 'template-input');
 		this.templateInput = contentEl.createEl('input', {
-			type: 'text',
-			value: this.plugin.settings.defaultTemplate
+			attr: {
+				type: 'text',
+				id: 'template-input'
+			},
+			value: this.plugin.settings.defaultTemplate,
+			cls: 'template-input-field'
 		});
-		this.templateInput.id = 'template-input';
-		this.templateInput.style.width = '100%';
 		this.templateInput.addEventListener('input', () => this.updatePreview());
 		
 		// Help text for template syntax
 		const helpText = contentEl.createEl('div', { cls: 'template-help' });
-		helpText.innerHTML = `
-			<details>
-				<summary>Template syntax help</summary>
-				<ul>
-					<li><strong>YYYY</strong>: 4-digit year (e.g., 2025)</li>
-					<li><strong>YY</strong>: 2-digit year (e.g., 25)</li>
-					<li><strong>MM</strong>: 2-digit month (01-12)</li>
-					<li><strong>M</strong>: Month without leading zero (1-12)</li>
-					<li><strong>DD</strong>: 2-digit day (01-31)</li>
-					<li><strong>D</strong>: Day without leading zero (1-31)</li>
-					<li><strong>HH</strong>: 2-digit hour, 24-hour format (00-23)</li>
-					<li><strong>H</strong>: Hour without leading zero (0-23)</li>
-					<li><strong>mm</strong>: 2-digit minute (00-59)</li>
-					<li><strong>m</strong>: Minute without leading zero (0-59)</li>
-					<li><strong>ss</strong>: 2-digit second (00-59)</li>
-					<li><strong>s</strong>: Second without leading zero (0-59)</li>
-					<li><strong>SSS</strong>: 3-digit millisecond (000-999)</li>
-					<li><strong>{random:N}</strong>: Random string of N characters</li>
-					<li><strong>{unixtime:B}</strong>: Unix timestamp in base B (2-36)</li>
-					<li><strong>{daytime:B}</strong>: Seconds since midnight in base B (2-36)</li>
-				</ul>
-			</details>
-		`;
-		helpText.style.marginBottom = '1rem';
+		
+		// Create details element
+		const details = helpText.createEl('details');
+		details.createEl('summary', { text: 'Template syntax help' });
+		
+		// Date & Time
+		const dateTimeSection = details.createEl('div');
+		dateTimeSection.createEl('h4', { text: 'Date & time' });
+		
+		const dateTimeList = dateTimeSection.createEl('ul');
+		const dateTimeItems = [
+			{ name: 'YYYY', desc: '4-digit year (e.g., 2025)' },
+			{ name: 'YY', desc: '2-digit year (e.g., 25)' },
+			{ name: 'MM', desc: '2-digit month (01-12)' },
+			{ name: 'M', desc: 'Month without leading zero (1-12)' },
+			{ name: 'MMMM', desc: 'Full month name (January, February...)' },
+			{ name: 'MMM', desc: 'Short month name (Jan, Feb...)' },
+			{ name: 'DD', desc: '2-digit day (01-31)' },
+			{ name: 'D', desc: 'Day without leading zero (1-31)' },
+			{ name: 'DDD', desc: 'Day of year (001-366)' },
+			{ name: 'dddd', desc: 'Full weekday name (Monday, Tuesday...)' },
+			{ name: 'ddd', desc: 'Short weekday name (Mon, Tue...)' },
+			{ name: 'WW', desc: 'Week number of year (01-53)' },
+			{ name: 'Q', desc: 'Quarter of year (1-4)' },
+			{ name: 'HH', desc: '2-digit hour, 24-hour format (00-23)' },
+			{ name: 'H', desc: 'Hour without leading zero (0-23)' },
+			{ name: 'mm', desc: '2-digit minute (00-59)' },
+			{ name: 'm', desc: 'Minute without leading zero (0-59)' },
+			{ name: 'ss', desc: '2-digit second (00-59)' },
+			{ name: 's', desc: 'Second without leading zero (0-59)' },
+			{ name: 'SSS', desc: '3-digit millisecond (000-999)' }
+		];
+		
+		this.createHelpList(dateTimeList, dateTimeItems);
+		
+		// Unique Identifiers
+		const idSection = details.createEl('div');
+		idSection.createEl('h4', { text: 'Unique identifiers & timestamps' });
+		
+		const idList = idSection.createEl('ul');
+		const idItems = [
+			{ name: '{random:N}', desc: 'Random string of N characters' },
+			{ name: '{uuid}', desc: 'Generate a UUID/GUID' },
+			{ name: '{shortid}', desc: 'Generate a shorter unique ID (8 chars)' },
+			{ name: '{unixtime:B}', desc: 'Unix timestamp in base B (2-36)' },
+			{ name: '{daytime:B}', desc: 'Seconds since midnight in base B (2-36)' },
+			{ name: '{hash:text}', desc: 'Create a hash of provided text' }
+		];
+		
+		this.createHelpList(idList, idItems);
+		
+		// Add other sections for counters, system variables, etc.
 		
 		// Preview
 		contentEl.createEl('label', { text: 'Preview:' });
 		this.previewEl = contentEl.createEl('div', { cls: 'template-preview' });
-		this.previewEl.style.padding = '8px';
-		this.previewEl.style.marginBottom = '1rem';
-		this.previewEl.style.borderRadius = '4px';
-		this.previewEl.style.backgroundColor = 'var(--background-secondary)';
 		
 		// Note content
-		contentEl.createEl('label', { text: 'Note Content:' }).setAttribute('for', 'content-input');
-		this.contentInput = contentEl.createEl('textarea');
-		this.contentInput.id = 'content-input';
-		this.contentInput.style.width = '100%';
-		this.contentInput.style.height = '150px';
-		this.contentInput.value = this.plugin.settings.defaultContent;
+		contentEl.createEl('label', { text: 'Note content:' }).setAttribute('for', 'content-input');
+		this.contentInput = contentEl.createEl('textarea', {
+			attr: { id: 'content-input' },
+			cls: 'content-input-field',
+			value: this.plugin.settings.defaultContent
+		});
 		
 		// Buttons
-		const buttonContainer = contentEl.createEl('div');
-		buttonContainer.style.marginTop = '1rem';
-		buttonContainer.style.display = 'flex';
-		buttonContainer.style.justifyContent = 'flex-end';
+		const buttonContainer = contentEl.createEl('div', { cls: 'button-container' });
 		
 		const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
 		cancelButton.addEventListener('click', () => this.close());
-		cancelButton.style.marginRight = '8px';
 		
 		const createButton = buttonContainer.createEl('button', { text: 'Create', cls: 'mod-cta' });
 		createButton.addEventListener('click', () => this.createNote());
 		
 		// Update preview on initial load
 		this.updatePreview();
+	}
+	
+	createHelpList(parentEl: HTMLElement, items: {name: string, desc: string}[]) {
+		items.forEach(item => {
+			const listItem = parentEl.createEl('li');
+			listItem.createEl('strong', { text: item.name });
+			listItem.createSpan({ text: ': ' + item.desc });
+		});
 	}
 
 	updatePreview() {
@@ -501,14 +535,17 @@ class TemplateFilenameModal extends Modal {
 			// Show success notification
 			new Notice(`Created note: ${file.name}`);
 			
-			// Open the new note
-			this.app.workspace.getLeaf(false).openFile(file);
+			// Open the new note using proper API
+			const activeLeaf = this.app.workspace.getLeaf(false);
+			if (activeLeaf) {
+				await activeLeaf.openFile(file);
+			}
 			
 			// Close the modal
 			this.close();
 		} catch (error) {
-			console.error('Error creating note:', error);
-			new Notice('Error creating note');
+			// Already handled in the plugin.createNote method
+			// No need to log to console or show duplicate notification
 		}
 	}
 
@@ -531,8 +568,7 @@ class TemplateFilenameSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('template-filename-settings');
 
-		containerEl.createEl('h2', { text: 'Template Filename Settings' });
-
+		// General settings (no heading per guidelines)
 		new Setting(containerEl)
 			.setName('Default filename template')
 			.setDesc('The default template to use for new notes')
@@ -555,49 +591,137 @@ class TemplateFilenameSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		// Add help section
-		containerEl.createEl('h3', { text: 'Template Syntax Help' });
+		// Help section (using Setting.setHeading as recommended)
+		new Setting(containerEl).setName('Template syntax help').setHeading();
 		
-		const helpList = containerEl.createEl('ul');
-		const helpItems = [
+		// Date and time 
+		new Setting(containerEl).setName('Date and time').setClass('setting-item-heading');
+		
+		const dateTimeSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const dateTimeList = dateTimeSection.createEl('ul', { cls: 'help-list' });
+		const dateTimeItems = [
 			{ name: 'YYYY', desc: '4-digit year (e.g., 2025)' },
 			{ name: 'YY', desc: '2-digit year (e.g., 25)' },
 			{ name: 'MM', desc: '2-digit month (01-12)' },
 			{ name: 'M', desc: 'Month without leading zero (1-12)' },
+			{ name: 'MMMM', desc: 'Full month name (January, February...)' },
+			{ name: 'MMM', desc: 'Short month name (Jan, Feb...)' },
 			{ name: 'DD', desc: '2-digit day (01-31)' },
 			{ name: 'D', desc: 'Day without leading zero (1-31)' },
+			{ name: 'DDD', desc: 'Day of year (001-366)' },
+			{ name: 'dddd', desc: 'Full weekday name (Monday, Tuesday...)' },
+			{ name: 'ddd', desc: 'Short weekday name (Mon, Tue...)' },
+			{ name: 'WW', desc: 'Week number of year (01-53)' },
+			{ name: 'Q', desc: 'Quarter of year (1-4)' },
 			{ name: 'HH', desc: '2-digit hour, 24-hour format (00-23)' },
 			{ name: 'H', desc: 'Hour without leading zero (0-23)' },
 			{ name: 'mm', desc: '2-digit minute (00-59)' },
 			{ name: 'm', desc: 'Minute without leading zero (0-59)' },
 			{ name: 'ss', desc: '2-digit second (00-59)' },
 			{ name: 's', desc: 'Second without leading zero (0-59)' },
-			{ name: 'SSS', desc: '3-digit millisecond (000-999)' },
-			{ name: '{random:N}', desc: 'Random string of N characters' },
-			{ name: '{unixtime:B}', desc: 'Unix timestamp in base B (2-36)' },
-			{ name: '{daytime:B}', desc: 'Seconds since midnight in base B (2-36)' }
+			{ name: 'SSS', desc: '3-digit millisecond (000-999)' }
 		];
 		
-		helpItems.forEach(item => {
-			const listItem = helpList.createEl('li');
-			listItem.createEl('strong', { text: item.name });
-			listItem.createSpan({ text: ': ' + item.desc });
-		});
+		this.createHelpList(dateTimeList, dateTimeItems);
+		
+		// IDs and timestamps
+		new Setting(containerEl).setName('Unique identifiers and timestamps').setClass('setting-item-heading');
+		
+		const idSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const idList = idSection.createEl('ul', { cls: 'help-list' });
+		const idItems = [
+			{ name: '{random:N}', desc: 'Random string of N characters' },
+			{ name: '{uuid}', desc: 'Generate a UUID/GUID' },
+			{ name: '{shortid}', desc: 'Generate a shorter unique ID (8 chars)' },
+			{ name: '{unixtime:B}', desc: 'Unix timestamp in base B (2-36)' },
+			{ name: '{daytime:B}', desc: 'Seconds since midnight in base B (2-36)' },
+			{ name: '{hash:text}', desc: 'Create a hash of provided text' }
+		];
+		
+		this.createHelpList(idList, idItems);
+		
+		// Counter variables
+		new Setting(containerEl).setName('Counter variables').setClass('setting-item-heading');
+		
+		const counterSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const counterList = counterSection.createEl('ul', { cls: 'help-list' });
+		const counterItems = [
+			{ name: '{counter}', desc: 'Global auto-incrementing counter' },
+			{ name: '{counter:name}', desc: 'Named counter (separate sequence)' },
+			{ name: '{counter:reset}', desc: 'Reset all counters' }
+		];
+		
+		this.createHelpList(counterList, counterItems);
+		
+		// System variables
+		new Setting(containerEl).setName('System variables').setClass('setting-item-heading');
+		
+		const systemSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const systemList = systemSection.createEl('ul', { cls: 'help-list' });
+		const systemItems = [
+			{ name: '{hostname}', desc: 'Computer/device name' },
+			{ name: '{username}', desc: 'Current user\'s name' }
+		];
+		
+		this.createHelpList(systemList, systemItems);
+		
+		// Text formatting
+		new Setting(containerEl).setName('Text formatting').setClass('setting-item-heading');
+		
+		const formatSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const formatList = formatSection.createEl('ul', { cls: 'help-list' });
+		const formatItems = [
+			{ name: '{lowercase:text}', desc: 'Convert text to lowercase' },
+			{ name: '{uppercase:text}', desc: 'Convert text to uppercase' },
+			{ name: '{slugify:text}', desc: 'Convert text to URL-friendly slug' }
+		];
+		
+		this.createHelpList(formatList, formatItems);
+		
+		// Clipboard integration
+		new Setting(containerEl).setName('Clipboard integration').setClass('setting-item-heading');
+		
+		const clipboardSection = containerEl.createDiv({ cls: 'setting-item-description' });
+		const clipboardList = clipboardSection.createEl('ul', { cls: 'help-list' });
+		const clipboardItems = [
+			{ name: '{clip}', desc: 'First word from clipboard' },
+			{ name: '{clip:N}', desc: 'First N characters from clipboard' },
+			{ name: '{clipword:N}', desc: 'Nth word from clipboard' }
+		];
+		
+		this.createHelpList(clipboardList, clipboardItems);
 
-		// Example section
-		const examplesSection = containerEl.createDiv({ cls: 'examples' });
-		examplesSection.createEl('h3', { text: 'Examples' });
-		const examplesList = examplesSection.createEl('ul');
-		[
+		// Examples section
+		new Setting(containerEl).setName('Examples').setHeading();
+		
+		const examplesSection = containerEl.createDiv({ cls: 'setting-item-description examples' });
+		const examplesList = examplesSection.createEl('ul', { cls: 'example-list' });
+		const examples = [
 			{ template: 'YYYY-MM-DD_note', desc: '2025-04-24_note.md' },
 			{ template: 'YYYY-MM-DD_HH-mm-ss', desc: '2025-04-24_15-30-45.md' },
+			{ template: 'MMM-D-YYYY_meeting-notes', desc: 'Apr-24-2025_meeting-notes.md' },
+			{ template: 'Q-YYYY-{random:6}', desc: '2-2025-a7bF9c.md' },
 			{ template: 'note_{random:6}', desc: 'note_a7bF9c.md' },
+			{ template: 'note_{shortid}', desc: 'note_2a9d8f7b.md' },
+			{ template: '{uuid}', desc: '123e4567-e89b-12d3-a456-426614174000.md' },
 			{ template: 'note_{unixtime:36}', desc: 'note_1c9rbbk.md (Unix time in base 36)' },
-			{ template: 'log_{daytime:16}', desc: 'log_12ab3.md (Seconds since midnight in base 16)' }
-		].forEach(example => {
+			{ template: 'log_{daytime:16}', desc: 'log_12ab3.md (Seconds since midnight in base 16)' },
+			{ template: 'entry-{counter}', desc: 'entry-1.md, entry-2.md, etc.' },
+			{ template: '{slugify:Meeting Notes 2025}', desc: 'meeting-notes-2025.md' }
+		];
+		
+		examples.forEach(example => {
 			const listItem = examplesList.createEl('li');
 			listItem.createEl('code', { text: example.template });
 			listItem.createSpan({ text: ' → ' + example.desc });
+		});
+	}
+	
+	createHelpList(parentEl: HTMLElement, items: {name: string, desc: string}[]) {
+		items.forEach(item => {
+			const listItem = parentEl.createEl('li');
+			listItem.createEl('strong', { text: item.name });
+			listItem.createSpan({ text: ': ' + item.desc });
 		});
 	}
 }
