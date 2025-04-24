@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-template-filename",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Create notes with templatable filenames in Obsidian, using date/time and random strings",
 	"main": "main.js",
 	"scripts": {
