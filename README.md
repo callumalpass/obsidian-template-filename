@@ -109,31 +109,6 @@ Alternatively, click the "file plus" icon in the left ribbon.
 - `entry-{counter}` → entry-1.md, entry-2.md, etc.
 - `{slugify:Meeting Notes 2025}` → meeting-notes-2025.md
 
-## Installation
-
-### From Obsidian
-
-1. Open Settings > Community plugins
-2. Turn off Safe mode if it's on
-3. Click Browse community plugins
-4. Search for "Template Filename"
-5. Click Install
-6. After installation is complete, click Enable
-
-### Manual Installation
-
-1. Download the latest release from the releases page
-2. Extract the zip file to your Obsidian plugins folder: `<vault>/.obsidian/plugins/`
-3. Reload Obsidian
-4. Enable the plugin in Settings > Community plugins
-
-## Development
-
-1. Clone this repository
-2. Run `npm install` to install dependencies
-3. Run `npm run dev` to start development server
-4. Make changes to the code
-5. Test your changes in Obsidian
 
 ## License
 
