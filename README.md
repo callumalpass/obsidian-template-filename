@@ -1,4 +1,4 @@
-# Obsidian Template Filename Plugin
+# Template Filename
 
 An Obsidian plugin for creating notes with templatable filenames using date/time formats, random strings, and custom base numbering systems.
 
