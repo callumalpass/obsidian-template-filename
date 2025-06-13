@@ -324,26 +324,6 @@ export default class TemplateFilenamePlugin extends Plugin {
 			case 'uppercase': return (params[0] || '').toUpperCase();
 			case 'slugify': return this.slugify(params[0] || '');
 			
-			// Clipboard (placeholder implementation)
-			case 'clip': {
-				const clipText = "clipboard-content";
-				if (params.length > 0) {
-					const charLimit = parseInt(params[0]);
-					return clipText.slice(0, charLimit);
-				}
-				return clipText.split(' ')[0];
-			}
-			
-			case 'clipword': {
-				const clipText = "clipboard content example";
-				const words = clipText.split(' ');
-				const wordIndex = parseInt(params[0]) - 1 || 0;
-				if (wordIndex >= 0 && wordIndex < words.length) {
-					return words[wordIndex];
-				}
-				return '';
-			}
-			
 			// Unknown variable
 			default: return `{${name}${params.length > 0 ? ':' + params.join(',') : ''}}`;
 		}
@@ -613,19 +593,6 @@ class TemplateFilenameModal extends Modal {
 		
 		this.createHelpList(formatList, formatItems);
 		
-		// Clipboard
-		const clipboardSection = details.createEl('div');
-		clipboardSection.createEl('h4', { text: 'Clipboard integration' });
-		
-		const clipboardList = clipboardSection.createEl('ul');
-		const clipboardItems = [
-			{ name: '{clip}', desc: 'First word from clipboard' },
-			{ name: '{clip:N}', desc: 'First N characters from clipboard' },
-			{ name: '{clipword:N}', desc: 'Nth word from clipboard' }
-		];
-		
-		this.createHelpList(clipboardList, clipboardItems);
-		
 		// Preview
 		contentEl.createEl('label', { text: 'Preview:' });
 		this.previewEl = contentEl.createEl('div', { cls: 'template-preview' });
@@ -830,19 +797,6 @@ class TemplateFilenameSettingTab extends PluginSettingTab {
 		
 		this.createHelpList(formatList, formatItems);
 		
-		// Clipboard integration
-		new Setting(containerEl).setName('Clipboard integration').setClass('setting-item-heading');
-		
-		const clipboardSection = containerEl.createDiv({ cls: 'setting-item-description' });
-		const clipboardList = clipboardSection.createEl('ul', { cls: 'help-list' });
-		const clipboardItems = [
-			{ name: '{clip}', desc: 'First word from clipboard' },
-			{ name: '{clip:N}', desc: 'First N characters from clipboard' },
-			{ name: '{clipword:N}', desc: 'Nth word from clipboard' }
-		];
-		
-		this.createHelpList(clipboardList, clipboardItems);
-
 		// Examples section
 		new Setting(containerEl).setName('Examples').setHeading();
 		
